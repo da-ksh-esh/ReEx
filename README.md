@@ -16,8 +16,13 @@ backend/    FastAPI service: scores each review and the product as a whole
    - **Any other site**: `schema.org/Review` objects embedded as JSON-LD
 3. The reviews go to `POST /analyze`, which scores each one from 0 to 1 by combining:
    - **Text model** (optional): TF-IDF + Logistic Regression trained with `train.py`
-   - **Rule-based signals**: near-duplicate text, several top ratings posted on the same date, very short high ratings, no verified purchase, a rating far from the product's average
-4. The popup shows a trust score out of 100, how many reviews are suspicious vs. genuine, and the reasons each review was flagged.
+   - **Rule-based signals**: near-duplicate text, several top ratings posted on the same date, very short high ratings, no verified purchase, a rating far from the product's average, and star ratings that contradict the text (a 5★ review with negative wording, or the reverse)
+4. Sentiment of each review (title + text) comes from [VADER](https://github.com/cjhutto/vaderSentiment), a word-list-based analyser that needs no training. When the text scores neutral, the star rating decides.
+5. The popup shows:
+   - a trust score out of 100, how many reviews are suspicious vs. genuine, and why each one was flagged
+   - the store's rating next to the average of the analyzed reviews, with and without the suspicious ones (e.g. "4.4★ → 4.0★ without the suspicious ones")
+   - how many genuine reviewers were positive, negative or neutral
+6. Each review on the page also gets a badge: green "looks genuine" or red "likely suspicious". Hover over it to see the reasons.
 
 If no model has been trained yet, the backend scores reviews with the rules alone, and the popup says so.
 
