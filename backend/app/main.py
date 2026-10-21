@@ -7,6 +7,7 @@ from .signals import compute_signals
 
 SUSPICIOUS_THRESHOLD = 0.5
 MODEL_WEIGHT = 0.6  # share of the final score from the text model when it's available
+MODEL_CONFIDENT = 0.7  # model score needed before its wording reason is shown to the user
 
 app = FastAPI(title="ReEx review analyzer")
 app.add_middleware(
@@ -37,13 +38,16 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             suspicion = signal_weight
         else:
             suspicion = MODEL_WEIGHT * model_score + (1 - MODEL_WEIGHT) * signal_weight
-            if model_score >= SUSPICIOUS_THRESHOLD:
-                reasons = ["Wording resembles known fake reviews", *reasons]
+        label = "suspicious" if suspicion >= SUSPICIOUS_THRESHOLD else "genuine"
+        # Only blame the wording when the model is confident and the review is actually flagged,
+        # so a "genuine" review never shows a reason saying it looks fake.
+        if model_score is not None and model_score >= MODEL_CONFIDENT and label == "suspicious":
+            reasons = ["Wording resembles known fake reviews", *reasons]
         results.append(
             ReviewResult(
                 index=i,
                 suspicion=round(suspicion, 3),
-                label="suspicious" if suspicion >= SUSPICIOUS_THRESHOLD else "genuine",
+                label=label,
                 model_score=None if model_score is None else round(model_score, 3),
                 reasons=reasons,
             )
