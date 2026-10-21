@@ -10,6 +10,7 @@ class Review(BaseModel):
     date: Optional[str] = None
     verified: Optional[bool] = None
     author: Optional[str] = None
+    reviewer_id: Optional[str] = None  # stable store account id when the page exposes one
 
 
 class PageRating(BaseModel):
@@ -28,8 +29,8 @@ class AnalyzeRequest(BaseModel):
 
 class ReviewResult(BaseModel):
     index: int
-    suspicion: float  # 0..1, higher = more likely fake
-    label: Literal["suspicious", "genuine"]
+    suspicion: float  # 0..1, higher = more likely fake; 0 for skipped reviews
+    label: Literal["suspicious", "genuine", "skipped"]  # skipped = not English, so not analyzed
     sentiment: Literal["positive", "negative", "neutral"]
     model_score: Optional[float] = None
     reasons: list[str]
@@ -52,11 +53,27 @@ class SentimentSummary(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    total: int
+    total: int  # reviews analyzed (skipped ones not included)
     suspicious: int
     genuine: int
+    skipped: int
     trust_score: int  # 0..100, higher = more trustworthy product reviews
     model_loaded: bool
     rating: RatingSummary
     sentiment: SentimentSummary
     results: list[ReviewResult]
+
+
+class FeedbackRequest(BaseModel):
+    """A user saying ReEx judged a review wrongly."""
+
+    url: Optional[str] = None
+    text: str = Field(min_length=1, max_length=20_000)
+    rating: Optional[float] = Field(default=None, ge=0, le=5)
+    predicted_label: Literal["suspicious", "genuine"]
+    user_label: Literal["fake", "genuine"]
+    model_score: Optional[float] = None
+
+
+class FeedbackResponse(BaseModel):
+    id: int

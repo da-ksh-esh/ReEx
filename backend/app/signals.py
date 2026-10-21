@@ -5,6 +5,7 @@ Each signal returns, per review, a weight (how suspicious it is) and a human-rea
 
 import re
 from collections import Counter
+from typing import Optional
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -24,6 +25,10 @@ RATING_DEVIATION_WEIGHT = 0.2
 MISMATCH_HIGH_RATING_MAX_COMPOUND = -0.5
 MISMATCH_LOW_RATING_MIN_COMPOUND = 0.6
 MISMATCH_WEIGHT = 0.25
+# From the store of earlier analyzed pages.
+COPIED_ELSEWHERE_WEIGHT = 0.5
+REPEAT_REVIEWER_MIN_PRODUCTS = 2
+REPEAT_REVIEWER_WEIGHT = 0.3
 
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 
@@ -58,8 +63,20 @@ def _burst_dates(reviews: list[Review]) -> set[str]:
     return {d for d, n in Counter(dates).items() if n >= BURST_MIN_COUNT}
 
 
-def compute_signals(reviews: list[Review], compounds: list[float]) -> list[tuple[float, list[str]]]:
-    """`compounds` holds each review's VADER compound sentiment score, in the same order as `reviews`."""
+def compute_signals(
+    reviews: list[Review],
+    compounds: list[float],
+    copied_elsewhere: Optional[set[int]] = None,
+    reviewer_flags: Optional[dict[int, int]] = None,
+) -> list[tuple[float, list[str]]]:
+    """All per-review inputs are aligned with `reviews` by position.
+
+    compounds: VADER compound sentiment score of each review.
+    copied_elsewhere: positions of reviews whose text was also seen on another product.
+    reviewer_flags: position -> number of other products where that reviewer was flagged.
+    """
+    copied_elsewhere = copied_elsewhere or set()
+    reviewer_flags = reviewer_flags or {}
     dupes = _near_duplicates(reviews)
     bursts = _burst_dates(reviews)
     ratings = [r.rating for r in reviews if r.rating is not None]
@@ -95,5 +112,12 @@ def compute_signals(reviews: list[Review], compounds: list[float]) -> list[tuple
             elif r.rating <= 2 and compounds[i] >= MISMATCH_LOW_RATING_MIN_COMPOUND:
                 weight += MISMATCH_WEIGHT
                 reasons.append("Low star rating, but the text is positive")
+        if i in copied_elsewhere:
+            weight += COPIED_ELSEWHERE_WEIGHT
+            reasons.append("The same text appears in reviews of another product")
+        flagged = reviewer_flags.get(i, 0)
+        if flagged >= REPEAT_REVIEWER_MIN_PRODUCTS:
+            weight += REPEAT_REVIEWER_WEIGHT
+            reasons.append(f"This reviewer was flagged on {flagged} other products")
         out.append((min(weight, 1.0), reasons))
     return out

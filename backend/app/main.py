@@ -3,10 +3,21 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .language import is_english
 from .model import TextModel
-from .schemas import AnalyzeRequest, AnalyzeResponse, RatingSummary, ReviewResult, SentimentSummary
+from .schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    FeedbackRequest,
+    FeedbackResponse,
+    RatingSummary,
+    Review,
+    ReviewResult,
+    SentimentSummary,
+)
 from .sentiment import compound_score, sentiment_label
 from .signals import compute_signals
+from .store import Store, is_long, product_key, text_hash
 
 SUSPICIOUS_THRESHOLD = 0.5
 MODEL_WEIGHT = 0.6  # share of the final score from the text model when it's available
@@ -21,6 +32,7 @@ app.add_middleware(
 )
 
 text_model = TextModel()
+store = Store()
 
 
 @app.get("/health")
@@ -32,14 +44,35 @@ def _mean(values: list[float]) -> Optional[float]:
     return round(sum(values) / len(values), 2) if values else None
 
 
+def _history_signals(product: Optional[str], reviews: list[Review], hashes: list[str]):
+    """Positions of reviews copied from another product, and of reviewers flagged on other products."""
+    if not product:
+        return set(), {}
+    seen = store.copied_elsewhere(product, [h for h, r in zip(hashes, reviews) if is_long(r.text)])
+    copied = {j for j, h in enumerate(hashes) if h in seen}
+    flags = store.flagged_products(product, [r.reviewer_id for r in reviews if r.reviewer_id])
+    reviewer_flags = {j: flags[r.reviewer_id] for j, r in enumerate(reviews) if r.reviewer_id in flags}
+    return copied, reviewer_flags
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     # Keep each review's position in the request so the extension can match results to page elements.
-    kept = [(i, r) for i, r in enumerate(req.reviews) if r.text.strip()]
-    reviews = [r for _, r in kept]
+    kept = [(i, r, is_english(r.text)) for i, r in enumerate(req.reviews) if r.text.strip()]
+    positions = [i for i, _, english in kept if english]
+    reviews = [r for _, r, english in kept if english]
+    skipped = [
+        ReviewResult(index=i, suspicion=0.0, label="skipped", sentiment="neutral", reasons=["Not in English, so not analyzed"])
+        for i, _, english in kept
+        if not english
+    ]
+
     # Titles often state the verdict ("Love it", "Worst experience") more plainly than mixed body text.
     compounds = [compound_score(f"{r.title}. {r.text}" if r.title else r.text) for r in reviews]
-    signals = compute_signals(reviews, compounds)
+    product = product_key(req.url)
+    hashes = [text_hash(r.text) for r in reviews]
+    copied, reviewer_flags = _history_signals(product, reviews, hashes)
+    signals = compute_signals(reviews, compounds, copied, reviewer_flags)
     model_scores = text_model.predict_fake_proba([r.text for r in reviews])
 
     results = []
@@ -56,13 +89,19 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             reasons = ["Wording resembles known fake reviews", *reasons]
         results.append(
             ReviewResult(
-                index=kept[i][0],
+                index=positions[i],
                 suspicion=round(suspicion, 3),
                 label=label,
                 sentiment=sentiment_label(compounds[i], reviews[i].rating),
                 model_score=None if model_score is None else round(model_score, 3),
                 reasons=reasons,
             )
+        )
+
+    if product:
+        store.record(
+            product,
+            [(h, is_long(r.text), r.reviewer_id, res.label == "suspicious") for h, r, res in zip(hashes, reviews, results)],
         )
 
     suspicious = sum(r.label == "suspicious" for r in results)
@@ -73,6 +112,7 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         total=len(results),
         suspicious=suspicious,
         genuine=len(results) - suspicious,
+        skipped=len(skipped),
         trust_score=round(100 * (1 - mean_suspicion)),
         model_loaded=text_model.loaded,
         rating=RatingSummary(
@@ -87,5 +127,18 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
             negative=genuine_sentiments.count("negative"),
             neutral=genuine_sentiments.count("neutral"),
         ),
-        results=results,
+        results=sorted(results + skipped, key=lambda r: r.index),
     )
+
+
+@app.post("/feedback", response_model=FeedbackResponse)
+def feedback(req: FeedbackRequest) -> FeedbackResponse:
+    feedback_id = store.add_feedback(
+        url=req.url,
+        text=req.text,
+        rating=req.rating,
+        predicted_label=req.predicted_label,
+        user_label=req.user_label,
+        model_score=req.model_score,
+    )
+    return FeedbackResponse(id=feedback_id)

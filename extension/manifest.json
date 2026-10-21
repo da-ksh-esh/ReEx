@@ -3,7 +3,7 @@
   "name": "ReEx - Review Examiner",
   "version": "0.1.0",
   "description": "Checks the reviews on a product page and flags the ones that look fake.",
-  "permissions": ["activeTab", "scripting"],
+  "permissions": ["activeTab", "scripting", "storage"],
   "host_permissions": ["http://localhost:8000/*", "http://127.0.0.1:8000/*"],
   "action": { "default_popup": "popup.html", "default_title": "Analyze reviews" }
 }

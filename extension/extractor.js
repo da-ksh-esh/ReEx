@@ -33,6 +33,8 @@
         date: text(q('[data-hook="review-date"]')).replace(/^Reviewed in .*? on /, ""),
         verified: !!q('[data-hook="avp-badge"], [data-hook="avp-badge-linkless"]'),
         author: text(q(".a-profile-name")),
+        // Profile links look like /gp/profile/amzn1.account.AF56...; reviews imported from other countries have none.
+        reviewer_id: (q('a.a-profile, a[href*="/gp/profile/"]')?.getAttribute("href") || "").match(/amzn1\.account\.[A-Z0-9]+/)?.[0] || null,
       };
     });
   }

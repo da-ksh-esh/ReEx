@@ -17,14 +17,28 @@ backend/    FastAPI service: scores each review and the product as a whole
 3. The reviews go to `POST /analyze`, which scores each one from 0 to 1 by combining:
    - **Text model** (optional): TF-IDF + Logistic Regression trained with `train.py`
    - **Rule-based signals**: near-duplicate text, several top ratings posted on the same date, very short high ratings, no verified purchase, a rating far from the product's average, and star ratings that contradict the text (a 5★ review with negative wording, or the reverse)
+   - **History signals**, from pages analyzed before (see [What the backend stores](#what-the-backend-stores)): the same long review text seen on a different product, and reviewers whose reviews were flagged on 2 or more other products (Amazon only, using the reviewer's profile ID)
+   
+   Reviews not in English are marked **not analyzed** and left out of every count, because the model and the sentiment analyser only understand English. Very short reviews are always analyzed, since language detection is unreliable on a few words. Hinglish written in Latin letters is detected as English, so it gets analyzed.
 4. Sentiment of each review (title + text) comes from [VADER](https://github.com/cjhutto/vaderSentiment), a word-list-based analyser that needs no training. When the text scores neutral, the star rating decides.
 5. The popup shows:
    - a trust score out of 100, how many reviews are suspicious vs. genuine, and why each one was flagged
    - the store's rating next to the average of the analyzed reviews, with and without the suspicious ones (e.g. "4.4★ → 4.0★ without the suspicious ones")
    - how many genuine reviewers were positive, negative or neutral
-6. Each review on the page also gets a badge: green "looks genuine" or red "likely suspicious". Hover over it to see the reasons.
+   - a **"Wrong?"** button on each review, which sends your correction to `POST /feedback` for later retraining
+6. Each review on the page also gets a badge: green "looks genuine", red "likely suspicious" or grey "not analyzed". Hover over it to see the reasons.
+7. Results are cached in the browser for each page URL. Reopening the popup shows the last result straight away. Clicking **Analyze** again reuses it without calling the backend, as long as the page shows the same reviews (for up to a day).
 
 If no model has been trained yet, the backend scores reviews with the rules alone, and the popup says so.
+
+## What the backend stores
+
+The backend keeps a small SQLite database at `backend/data/reex.sqlite3`, which is excluded from git:
+
+- **`reviews`**: one row per product and review: a SHA-256 hash of the normalized review text (never the text itself), whether it's long enough to count as a copy (12+ words), the reviewer's profile ID if the page shows one, and whether ReEx flagged it. This is what makes the history signals work. It only contains pages you have analyzed yourself.
+- **`feedback`**: reviews someone marked as wrongly judged, with the review text, the stars, ReEx's verdict and the user's correction. The text is kept because retraining needs it. It's public review text from the product page.
+
+Delete the file to reset both.
 
 ## Setup
 
@@ -41,7 +55,7 @@ On macOS or Linux, use `.venv/bin/python` instead. To check it's running, open h
 
 ### Train the baseline model
 
-1. Download the [Fake Reviews Dataset](https://www.kaggle.com/datasets/mexwell/fake-reviews-dataset) (Salminen et al., 2022) to `backend/data/fake_reviews_dataset.csv`.
+1. Download the Fake Reviews Dataset (Salminen et al., 2022) from [OSF](https://osf.io/tyue9/) (no account needed) or [Kaggle](https://www.kaggle.com/datasets/mexwell/fake-reviews-dataset), and save it as `backend/data/fake_reviews_dataset.csv`.
 2. Train:
 
 ```bash
@@ -53,13 +67,27 @@ This prints a classification report and saves `backend/models/baseline.joblib`. 
 
 > **Caveat:** the fakes in this dataset were written by a machine (GPT-2), so the model mostly learns "does this sound like generated text?". It won't catch paid reviews written by humans. To cover those, combine it with other datasets (Ott et al. deceptive opinion spam, YelpChi/YelpNYC), and test on data from a domain you didn't train on.
 
+### Benchmark the models
+
+```bash
+cd backend
+.venv/Scripts/python benchmark.py --data data/fake_reviews_dataset.csv
+```
+
+This compares Logistic Regression (with trigrams and without stop words as well), Naive Bayes, Linear SVM and Random Forest. Each one is evaluated three ways:
+- **In-domain:** a normal 80/20 split.
+- **Cross-category:** train on 9 product categories, test on the 10th, repeated for each category.
+- **External (optional):** test on a second labelled CSV with `--external`, e.g. the Ott corpus.
+
+Exact duplicate texts are removed before splitting, so no review appears in both the training and the test set. Results are saved to `backend/reports/benchmark.md`. The full run takes several minutes; `--skip-cross-category` makes it much faster.
+
 ### Extension
 
 1. Open `chrome://extensions` and turn on **Developer mode**.
 2. Click **Load unpacked** and select the `extension/` folder.
 3. Open an Amazon or Flipkart product page, scroll to the reviews, and click the ReEx icon.
 
-The backend URL is set by `API_URL` in `extension/popup.js`. If you change it, also update `host_permissions` in `manifest.json`.
+The backend URL is set by `API_BASE` in `extension/popup.js`. If you change it, also update `host_permissions` in `manifest.json`.
 
 ## Tests
 

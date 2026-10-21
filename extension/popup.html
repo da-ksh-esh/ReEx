@@ -14,7 +14,10 @@
     .review { border-top: 1px solid #ddd; padding: 6px 0; }
     .review.suspicious .tag { color: #c62828; }
     .review.genuine .tag { color: #2e7d32; }
+    .review.skipped .tag { color: #757575; }
     .tag { font-weight: 600; }
+    button.feedback { width: auto; padding: 1px 6px; margin-top: 4px; font: 11px system-ui, sans-serif; font-weight: 400; color: #555; background: none; border: 1px solid #ccc; border-radius: 4px; }
+    button.feedback:disabled { cursor: default; color: #2e7d32; border-color: transparent; }
     .snippet { color: #444; margin: 2px 0; }
     .reasons { margin: 2px 0 0 16px; padding: 0; color: #666; }
     #list { max-height: 380px; overflow-y: auto; }
