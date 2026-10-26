@@ -10,24 +10,34 @@ backend/    FastAPI service: scores each review and the product as a whole
 ## How it works
 
 1. You click **Analyze reviews** in the popup. It injects `extractor.js` into the current tab.
-2. The extractor finds the reviews:
-   - **Amazon**: `data-hook` selectors (body, rating, date, verified badge, author)
+2. On Amazon, ReEx can also check more reviews than the page shows (**Reviews to check** in the popup, default up to 100). `loadReviewsInPage` in `popup.js`:
+   - loads the product's reviews page in an invisible frame inside the product page you're on, so no tab opens (Amazon allows this because both pages are on the same Amazon site)
+   - presses Amazon's own "Show 10 more reviews" button, waiting 1.5 s between presses
+   - reads the reviews and removes the frame (it keeps going and cleans up even if you close the popup)
+   
+   Notes:
+   - This needs you to be **signed in to Amazon**: signed out, Amazon only shows the first 10.
+   - Amazon's list ends at about **100 reviews** even when a product has more, and 100 takes about 20 seconds.
+   - It stops straight away on a sign-in or CAPTCHA page instead of trying to get past it.
+   - Badges only appear on the reviews visible on the product page; the popup lists all of them.
+3. The extractor finds the reviews:
+   - **Amazon**: `data-hook` selectors (body, title, rating, date, verified badge, author, review and reviewer IDs)
    - **Flipkart**: looks for each "Certified Buyer" label and walks up to the review around it (brittle, because Flipkart's class names change often)
    - **Any other site**: `schema.org/Review` objects embedded as JSON-LD
-3. The reviews go to `POST /analyze`, which scores each one from 0 to 1 by combining:
+4. The reviews go to `POST /analyze`, which scores each one from 0 to 1 by combining:
    - **Text model** (optional): TF-IDF + Logistic Regression trained with `train.py`
    - **Rule-based signals**: near-duplicate text, several top ratings posted on the same date, very short high ratings, no verified purchase, a rating far from the product's average, and star ratings that contradict the text (a 5★ review with negative wording, or the reverse)
    - **History signals**, from pages analyzed before (see [What the backend stores](#what-the-backend-stores)): the same long review text seen on a different product, and reviewers whose reviews were flagged on 2 or more other products (Amazon only, using the reviewer's profile ID)
    
    Reviews not in English are marked **not analyzed** and left out of every count, because the model and the sentiment analyser only understand English. Very short reviews are always analyzed, since language detection is unreliable on a few words. Hinglish written in Latin letters is detected as English, so it gets analyzed.
-4. Sentiment of each review (title + text) comes from [VADER](https://github.com/cjhutto/vaderSentiment), a word-list-based analyser that needs no training. When the text scores neutral, the star rating decides.
-5. The popup shows:
+5. Sentiment of each review (title + text) comes from [VADER](https://github.com/cjhutto/vaderSentiment), a word-list-based analyser that needs no training. When the text scores neutral, the star rating decides.
+6. The popup shows:
    - a trust score out of 100, how many reviews are suspicious vs. genuine, and why each one was flagged
    - the store's rating next to the average of the analyzed reviews, with and without the suspicious ones (e.g. "4.4★ → 4.0★ without the suspicious ones")
    - how many genuine reviewers were positive, negative or neutral
    - a **"Wrong?"** button on each review, which sends your correction to `POST /feedback` for later retraining
-6. Each review on the page also gets a badge: green "looks genuine", red "likely suspicious" or grey "not analyzed". Hover over it to see the reasons.
-7. Results are cached in the browser for each page URL. Reopening the popup shows the last result straight away. Clicking **Analyze** again reuses it without calling the backend, as long as the page shows the same reviews (for up to a day).
+7. Each review on the page also gets a badge: green "looks genuine", red "likely suspicious" or grey "not analyzed". Hover over it to see the reasons.
+8. Results are cached in the browser for each page URL. Reopening the popup shows the last result straight away. Clicking **Analyze** again reuses it without calling the backend, as long as the page shows the same reviews (for up to a day).
 
 If no model has been trained yet, the backend scores reviews with the rules alone, and the popup says so.
 
@@ -98,13 +108,13 @@ cd backend
 
 ## Known limitations
 
-- Only reviews currently on the page are analyzed (usually 5-10). Opening the "See all reviews" page gives more.
+- Beyond the reviews on the page, only Amazon is supported, up to Amazon's own limit of about 100 reviews, and only while signed in. Flipkart and other sites use just the reviews on the page.
 - Site selectors break when stores change their HTML. Flipkart breaks most often.
 - Scores are estimates. The UI says "likely suspicious", not "fake", on purpose.
 
 ## Next steps
 
 - Fine-tune a transformer (DistilBERT/RoBERTa) to replace the TF-IDF baseline
-- Follow pagination to collect more reviews
+- Load more reviews on Flipkart; reach past Amazon's 100 by loading each star rating separately
 - Add more site adapters (Myntra, Meesho, ...) and a generic DOM-heuristic extractor
 - Run a small model in the browser (ONNX Runtime Web / transformers.js), so reviews never leave the browser

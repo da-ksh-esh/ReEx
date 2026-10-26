@@ -27,7 +27,7 @@ MISMATCH_LOW_RATING_MIN_COMPOUND = 0.6
 MISMATCH_WEIGHT = 0.25
 # From the store of earlier analyzed pages.
 COPIED_ELSEWHERE_WEIGHT = 0.5
-REPEAT_REVIEWER_MIN_PRODUCTS = 2
+REPEAT_REVIEWER_MIN_FLAGGED = 2
 REPEAT_REVIEWER_WEIGHT = 0.3
 
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
@@ -73,7 +73,7 @@ def compute_signals(
 
     compounds: VADER compound sentiment score of each review.
     copied_elsewhere: positions of reviews whose text was also seen on another product.
-    reviewer_flags: position -> number of other products where that reviewer was flagged.
+    reviewer_flags: position -> number of that reviewer's reviews flagged on other products.
     """
     copied_elsewhere = copied_elsewhere or set()
     reviewer_flags = reviewer_flags or {}
@@ -116,8 +116,8 @@ def compute_signals(
             weight += COPIED_ELSEWHERE_WEIGHT
             reasons.append("The same text appears in reviews of another product")
         flagged = reviewer_flags.get(i, 0)
-        if flagged >= REPEAT_REVIEWER_MIN_PRODUCTS:
+        if flagged >= REPEAT_REVIEWER_MIN_FLAGGED:
             weight += REPEAT_REVIEWER_WEIGHT
-            reasons.append(f"This reviewer was flagged on {flagged} other products")
+            reasons.append(f"This reviewer has {flagged} reviews flagged on other products")
         out.append((min(weight, 1.0), reasons))
     return out

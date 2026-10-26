@@ -45,12 +45,17 @@ def _mean(values: list[float]) -> Optional[float]:
 
 
 def _history_signals(product: Optional[str], reviews: list[Review], hashes: list[str]):
-    """Positions of reviews copied from another product, and of reviewers flagged on other products."""
+    """Positions of reviews copied from another product, and of reviewers with flagged reviews elsewhere."""
     if not product:
         return set(), {}
-    seen = store.copied_elsewhere(product, [h for h, r in zip(hashes, reviews) if is_long(r.text)])
-    copied = {j for j, h in enumerate(hashes) if h in seen}
-    flags = store.flagged_products(product, [r.reviewer_id for r in reviews if r.reviewer_id])
+    long_positions = [j for j, r in enumerate(reviews) if is_long(r.text)]
+    hits = store.copied_elsewhere(product, [(hashes[j], reviews[j].review_id, reviews[j].reviewer_id) for j in long_positions])
+    copied = {long_positions[k] for k in hits}
+    flags = store.flagged_reviews(
+        product,
+        [r.reviewer_id for r in reviews if r.reviewer_id],
+        exclude_review_ids=[r.review_id for r in reviews if r.review_id],
+    )
     reviewer_flags = {j: flags[r.reviewer_id] for j, r in enumerate(reviews) if r.reviewer_id in flags}
     return copied, reviewer_flags
 
@@ -101,7 +106,10 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     if product:
         store.record(
             product,
-            [(h, is_long(r.text), r.reviewer_id, res.label == "suspicious") for h, r, res in zip(hashes, reviews, results)],
+            [
+                (h, is_long(r.text), r.reviewer_id, res.label == "suspicious", r.review_id)
+                for h, r, res in zip(hashes, reviews, results)
+            ],
         )
 
     suspicious = sum(r.label == "suspicious" for r in results)

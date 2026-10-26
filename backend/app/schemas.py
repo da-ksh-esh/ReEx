@@ -11,6 +11,7 @@ class Review(BaseModel):
     verified: Optional[bool] = None
     author: Optional[str] = None
     reviewer_id: Optional[str] = None  # stable store account id when the page exposes one
+    review_id: Optional[str] = None  # the store's own id for this review, when the page exposes one
 
 
 class PageRating(BaseModel):

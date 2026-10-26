@@ -81,18 +81,76 @@ def test_short_reviews_are_not_treated_as_copies():
     assert not any("another product" in x for x in body["results"][0]["reasons"])
 
 
-def test_reviewer_flagged_on_two_other_products():
-    spammy = {"reviewer_id": "amzn1.account.SPAM", "rating": 5, "verified": False}
-    # duplicates on the same page get the reviewer flagged on each product
-    for asin in ["AAAAAAAAAA", "BBBBBBBBBB"]:
-        dup = f"Best purchase ever made for {asin}, everyone in my family loves it and so will you, buy it now"
-        _analyze(f"https://www.amazon.in/dp/{asin}", [{**spammy, "text": dup}, {**spammy, "text": dup + "!"}])
+def test_copy_with_a_different_review_id_is_flagged():
+    _analyze("https://www.amazon.in/dp/AAAAAAAAAA", [{"text": LONG_COPY, "rating": 5, "review_id": "R1AAAAAAAAA"}])
+    body = _analyze("https://www.amazon.in/dp/BBBBBBBBBB", [{"text": LONG_COPY, "rating": 5, "review_id": "R2BBBBBBBBB"}])
+    assert "The same text appears in reviews of another product" in body["results"][0]["reasons"]
 
+
+def test_same_review_on_a_product_variant_is_not_a_copy():
+    # Amazon shows one review on every variant (colour, switch type...), each with its own ASIN.
+    review = {"text": LONG_COPY, "rating": 5, "review_id": "R1AAAAAAAAA", "reviewer_id": "amzn1.account.X"}
+    _analyze("https://www.amazon.in/dp/AAAAAAAAAA", [review])
+    body = _analyze("https://www.amazon.in/dp/BBBBBBBBBB", [review])
+    assert not any("another product" in x for x in body["results"][0]["reasons"])
+
+
+def test_rows_stored_without_review_ids_fall_back_to_the_reviewer():
+    _analyze("https://www.amazon.in/dp/AAAAAAAAAA", [{"text": LONG_COPY, "rating": 5, "reviewer_id": "amzn1.account.X"}])
+    same = _analyze("https://www.amazon.in/dp/BBBBBBBBBB", [{"text": LONG_COPY, "rating": 5, "reviewer_id": "amzn1.account.X"}])
+    other = _analyze("https://www.amazon.in/dp/CCCCCCCCCC", [{"text": LONG_COPY, "rating": 5, "reviewer_id": "amzn1.account.Y"}])
+    assert not any("another product" in x for x in same["results"][0]["reasons"])
+    assert "The same text appears in reviews of another product" in other["results"][0]["reasons"]
+
+
+SPAMMY = {"reviewer_id": "amzn1.account.SPAM", "rating": 5, "verified": False}
+
+
+def _flag_spammy_review(asin, review_id):
+    # Two near-identical unverified 5-star reviews on one page get flagged as duplicates.
+    dup = f"Best purchase ever made for {asin}, everyone in my family loves it and so will you, buy it now"
+    _analyze(f"https://www.amazon.in/dp/{asin}", [{**SPAMMY, "text": dup, "review_id": review_id}, {**SPAMMY, "text": dup + " today"}])
+
+
+def test_reviewer_with_flagged_reviews_on_other_products():
+    _flag_spammy_review("AAAAAAAAAA", "R1AAAAAAAAA")
+    _flag_spammy_review("BBBBBBBBBB", "R2BBBBBBBBB")
     body = _analyze(
         "https://www.amazon.in/dp/CCCCCCCCCC",
-        [{**spammy, "verified": True, "text": "Solid keyboard with crisp switches, though the cable is a little short."}],
+        [{**SPAMMY, "verified": True, "text": "Solid keyboard with crisp switches, though the cable is a little short."}],
     )
-    assert "This reviewer was flagged on 2 other products" in body["results"][0]["reasons"]
+    assert any(x.startswith("This reviewer has") and "reviews flagged on other products" in x for x in body["results"][0]["reasons"])
+
+
+def test_one_review_shown_on_variants_counts_once_for_the_reviewer():
+    # The same flagged review (same id) recorded on two variants is one review, not two.
+    for asin in ["AAAAAAAAAA", "BBBBBBBBBB"]:
+        dup = "Best purchase ever made, everyone in my family loves it and so will you, buy it now right away"
+        _analyze(f"https://www.amazon.in/dp/{asin}", [{**SPAMMY, "text": dup, "review_id": "R1SAMEREVIE"}, {**SPAMMY, "text": dup + "!", "review_id": "R1SAMEREVIE"}])
+    body = _analyze(
+        "https://www.amazon.in/dp/CCCCCCCCCC",
+        [{**SPAMMY, "verified": True, "text": "Solid keyboard with crisp switches, though the cable is a little short."}],
+    )
+    assert not any("reviews flagged on other products" in x for x in body["results"][0]["reasons"])
+
+
+def test_old_database_gets_review_id_column(tmp_path):
+    import sqlite3
+
+    from app.store import Store
+
+    path = tmp_path / "old.sqlite3"
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute(
+            "CREATE TABLE reviews (product TEXT NOT NULL, text_hash TEXT NOT NULL, long_text INTEGER NOT NULL, "
+            "reviewer TEXT, suspicious INTEGER NOT NULL, seen_at REAL NOT NULL, PRIMARY KEY (product, text_hash))"
+        )
+        db.execute("INSERT INTO reviews VALUES ('amazon:A', 'h', 1, 'r', 0, 0)")
+    store = Store(path)
+    with closing(store._connect()) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(reviews)")}
+        assert "review_id" in columns
+        assert db.execute("SELECT COUNT(*) FROM reviews").fetchone()[0] == 1
 
 
 def test_store_keeps_only_hashes_of_review_text(temp_store):
